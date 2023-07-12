@@ -1,0 +1,59 @@
+name: build and push image
+
+on:
+  push: {}
+
+env:
+  PACKAGE_TOKEN: ${{ secrets.PACKAGE_TOKEN }}
+
+jobs:
+  build-and-push-image:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+
+    steps:
+     - id: docker-repo-finder
+       run: |
+         (
+             if [ x"$PACKAGE_TOKEN" = x ];then
+                 echo PACKAGE_TOKEN=$GITHUB_TOKEN
+             fi
+             if [ x"$GITHUB_SERVER_URL" = x"https://git.strudelline.net" ];then
+                 echo REGISTRY=git.strudelline.net
+             else
+                 echo REGISTRY=ghcr.io
+             fi
+         ) | tee -a $GITHUB_OUTPUT | tee -a $GITHUB_ENV
+     - run: env | sort
+     - name: Checkout repository
+       uses: actions/checkout@v3
+     - name: Set up Docker Buildx
+       uses: docker/setup-buildx-action@v2
+     - name: Extract metadata (tags, labels) for Docker
+       id: meta
+       uses: docker/metadata-action@v4
+       with:
+         images: ${{ steps.docker-repo-finder.outputs.REGISTRY }}/${{ github.repository }}
+         tags: |
+           type=raw,value=latest,enable={{is_default_branch}}
+           type=schedule
+           type=semver,pattern={{version}}
+           type=semver,pattern={{major}}.{{minor}}
+           type=semver,pattern={{major}}
+           type=ref,event=branch
+           type=ref,event=pr
+           type=sha
+     - run: |
+         echo TAGS: "$(printf "-t %q" "$TAGS")"
+         echo LABELS: "$LABELS"
+         echo "$PACKAGE_TOKEN" | docker login -u "$GITHUB_ACTOR" --password-stdin https://$REGISTRY
+         docker build $(printf " -t %q" $TAGS) $(printf " --label %q" $LABELS) .
+         for t in $TAGS;do
+             docker push "$t"
+         done
+       env:
+         TAGS: ${{ steps.meta.outputs.tags }}
+         LABELS: ${{ steps.meta.outputs.labels }}
